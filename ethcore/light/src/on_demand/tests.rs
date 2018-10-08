@@ -18,6 +18,7 @@
 
 use cache::Cache;
 use ethcore::header::Header;
+use ethcore::encoded::Header as EncodedHeader;
 use futures::Future;
 use network::{PeerId, NodeId};
 use net::*;
@@ -28,7 +29,7 @@ use ::request::{self as basic_request, Response};
 
 use std::sync::Arc;
 
-use super::{request, OnDemand, Peer, HeaderRef};
+use super::{request, OnDemand, Peer, HeaderRef, ResponseError, ValidityError};
 
 // useful contexts to give the service.
 enum Context {
@@ -367,6 +368,61 @@ fn part_bad_part_good() {
 	assert!(recv.wait().is_ok());
 }
 
+
+#[test]
+fn determine_faulty_request_by_majority() {
+	let harness = Harness::create();
+
+        // peer[0]      - requester ("light")
+        // peer[1..9]   - responders ("providers"
+        let peers: Vec<PeerId> = (1..=10).map(|id| id).collect();
+
+	let req_id = ReqId(14426);
+
+        for peer in &peers {
+	    harness.inject_peer(
+                *peer,
+                Peer {
+		    status: dummy_status(),
+		    capabilities: dummy_capabilities(),
+                }
+            );
+        }
+
+        let empty_header = EncodedHeader::empty();
+
+	// Make a `faulty request`
+	let _recv = harness.service.request_raw(
+		&Context::RequestFrom(peers[0], req_id),
+		vec![
+			request::HeaderByHash(empty_header.hash().into()).into(),
+		],
+	).unwrap();
+
+
+        // Send 6 empty response to `peer_id 2`
+        // When we have got `bad_responses` > |peers| / 2 then drop the request
+        for i in 0..=5 {
+            harness.service.dispatch_pending(&Context::RequestFrom(peers[1], req_id));
+            assert!(harness.service.in_transit.read().get(&req_id).is_some());
+	    harness.service.on_responses(
+		&Context::WithPeer(peers[i]),
+		req_id,
+		&[
+			Response::Headers(basic_request::HeadersResponse::empty())
+		]
+	    );
+            // Until 6 bad responses have been received the pending will be refilled
+            if i < 5 {
+                assert_eq!(harness.service.pending.read().len(), 1);
+            }
+    }
+
+        // the request has been dropped reached `bad_responses` > |peers| / 2`
+        assert_eq!(harness.service.pending.read().len(), 0);
+        assert!(harness.service.in_transit.read().get(&req_id).is_none());
+}
+
 #[test]
 fn wrong_kind() {
 	let harness = Harness::create();
@@ -494,4 +550,34 @@ fn fill_from_cache() {
 	);
 
 	assert!(recv.wait().is_ok());
+}
+
+
+#[test]
+fn empty_header_request() {
+	let harness = Harness::create();
+	let peer_id = 0;
+        let req_id = ReqId(13);
+
+        harness.inject_peer(
+            peer_id,
+            Peer {
+	        status: dummy_status(),
+		capabilities: dummy_capabilities(),
+            }
+        );
+
+	let _recv = harness.service.request_raw(
+		&Context::RequestFrom(peer_id, req_id),
+		vec![
+			request::HeaderByHash(EncodedHeader::empty().hash().into()).into(),
+		],
+	).unwrap();
+
+	harness.service.dispatch_pending(&Context::RequestFrom(peer_id, req_id));
+
+        let mut pending = harness.service.in_transit.write().remove(&req_id).unwrap();
+        // Empty response
+        let response = Response::Headers(basic_request::HeadersResponse::empty());
+        assert_eq!(pending.supply_response(&harness.service.cache, &response), Err(ResponseError::Validity(ValidityError::Empty)));
 }
