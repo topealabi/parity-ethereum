@@ -567,7 +567,12 @@ impl LightProtocol {
 			None => Err(Error::UnknownPeer), // probably only occurs in a race of some kind.
 		};
 
-		res.map(|_| IdGuard::new(peers, peer, req_id))
+		if let Err(e) = res {
+			trace!(target: "on_demand", "pre_verify response failed {:?}", e);
+			Err(e)
+		} else {
+			Ok(IdGuard::new(peers, peer, req_id))
+		}
 	}
 
 	/// Handle a packet using the given io context.
@@ -949,20 +954,23 @@ impl LightProtocol {
 		let num_requests = requests.requests().len();
 		trace!(target: "pip", "Beginning to respond to requests (id: {}) from peer {}", req_id, peer_id);
 
-		// respond to all requests until one fails.
+		// FIXME:
+		// All responses are well-formed here now, but because of the structure of
+		// `incomplete/complete response/request` and// and associated methods are designed for Option's`.
+		// That's why these conversions are a bit `clumsy` and `responses` is represented as option even though it can't fail
 		let responses = requests.respond_to_all(|complete_req| {
 			let _timer = self.load_distribution.begin_timer(&complete_req);
 			match complete_req {
-				CompleteRequest::Headers(req) => self.provider.block_headers(req).map(Response::Headers),
-				CompleteRequest::HeaderProof(req) => self.provider.header_proof(req).map(Response::HeaderProof),
-				CompleteRequest::TransactionIndex(req) => self.provider.transaction_index(req).map(Response::TransactionIndex),
-				CompleteRequest::Body(req) => self.provider.block_body(req).map(Response::Body),
-				CompleteRequest::Receipts(req) => self.provider.block_receipts(req).map(Response::Receipts),
-				CompleteRequest::Account(req) => self.provider.account_proof(req).map(Response::Account),
-				CompleteRequest::Storage(req) => self.provider.storage_proof(req).map(Response::Storage),
-				CompleteRequest::Code(req) => self.provider.contract_code(req).map(Response::Code),
-				CompleteRequest::Execution(req) => self.provider.transaction_proof(req).map(Response::Execution),
-				CompleteRequest::Signal(req) => self.provider.epoch_signal(req).map(Response::Signal),
+				CompleteRequest::Headers(req) => Some(Response::Headers(self.provider.block_headers(req).unwrap_or_else(|e| e))),
+				CompleteRequest::HeaderProof(req) => Some(Response::HeaderProof(self.provider.header_proof(req).unwrap_or_else(|e| e))),
+				CompleteRequest::TransactionIndex(req) => Some(Response::TransactionIndex(self.provider.transaction_index(req).unwrap_or_else(|e| e))),
+				CompleteRequest::Body(req) => Some(Response::Body(self.provider.block_body(req).unwrap_or_else(|e| e))),
+				CompleteRequest::Receipts(req) => Some(Response::Receipts(self.provider.block_receipts(req).unwrap_or_else(|e| e))),
+				CompleteRequest::Account(req) => Some(Response::Account(self.provider.account_proof(req).unwrap_or_else(|e| e))),
+				CompleteRequest::Storage(req) => Some(Response::Storage(self.provider.storage_proof(req).unwrap_or_else(|e| e))),
+				CompleteRequest::Code(req) => Some(Response::Code(self.provider.contract_code(req).unwrap_or_else(|e| e))),
+				CompleteRequest::Execution(req) => Some(Response::Execution(self.provider.transaction_proof(req).unwrap_or_else(|e| e))),
+				CompleteRequest::Signal(req) => Some(Response::Signal(self.provider.epoch_signal(req).unwrap_or_else(|e| e))),
 			}
 		});
 

@@ -61,10 +61,23 @@ impl Header {
 
 	/// Consume the view and return the raw bytes.
 	pub fn into_inner(self) -> Vec<u8> { self.0 }
+
+	/// Create a empty encoded Header
+	pub fn empty() -> Self {
+		// vec![0xc0]
+		let empty_list = RlpStream::new_list(0);
+		Header(empty_list.out())
+	}
 }
 
 // forwarders to borrowed view.
 impl Header {
+	/// Is a empty Header
+	pub fn is_empty(&self) -> bool {
+		let rlp = Rlp::new(&self.0);
+		rlp.is_empty()
+	}
+
 	/// Returns the header hash.
 	pub fn hash(&self) -> H256 { keccak(&self.0) }
 
@@ -174,6 +187,9 @@ impl Body {
 
 	/// Hash of each uncle.
 	pub fn uncle_hashes(&self) -> Vec<H256> { self.view().uncle_hashes() }
+
+	/// Is empty
+	pub fn is_empty(&self) -> bool { self.0.is_empty() }
 }
 
 /// Owning block view.

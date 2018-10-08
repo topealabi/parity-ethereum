@@ -292,7 +292,7 @@ impl From<Request> for CheckedRequest {
 			}
 			Request::TransactionIndex(req) => {
 				let net_req = net_request::IncompleteTransactionIndexRequest {
-					hash: req.0,
+					hash: Some(req.0),
 				};
 				trace!(target: "on_demand", "TransactionIndex Request, {:?}", net_req);
 				CheckedRequest::TransactionIndex(req, net_req)
@@ -411,9 +411,9 @@ impl CheckedRequest {
 			CheckedRequest::HeaderByHash(_, ref req) => {
 				if let Some(&net_request::HashOrNumber::Hash(ref h)) = req.start.as_ref() {
 					return cache.lock().block_header(h).map(Response::HeaderByHash);
+				} else {
+					None
 				}
-
-				None
 			}
 			CheckedRequest::HeaderWithAncestors(_, ref req) => {
 				if req.skip != 1 || !req.reverse {
@@ -818,16 +818,23 @@ impl HeaderWithAncestors {
 	) -> Result<Vec<encoded::Header>, Error> {
 		let expected_hash = match (self.block_hash, start) {
 			(Field::Scalar(h), &net_request::HashOrNumber::Hash(h2)) => {
-				if h != h2 { return Err(Error::WrongHash(h, h2)) }
+				if h != h2 {
+					trace!(target: "on_demand", "HeaderWithAncestors bad hash");
+					return Err(Error::WrongHash(h, h2))
+				}
 				h
 			}
 			(_, &net_request::HashOrNumber::Hash(h2)) => h2,
-			_ => return Err(Error::HeaderByNumber),
+			_ => {
+				trace!(target: "on_demand", "HeaderWithAncestors request by block number instead of hash");
+				return Err(Error::HeaderByNumber)
+			}
 		};
 
 		let start_header = headers.first().ok_or(Error::Empty)?;
 		let start_hash = start_header.hash();
 		if start_hash != expected_hash {
+			trace!(target: "on_demand", "HeaderWithAncestors bad hash");
 			return Err(Error::WrongHash(expected_hash, start_hash));
 		}
 
@@ -845,6 +852,7 @@ impl HeaderWithAncestors {
 			if header.number() != prev_header.number() + 1 ||
 				header.parent_hash() != prev_header.hash()
 			{
+				trace!(target: "on_demand", "HeaderWithAncestors wrong header sequence");
 				return Err(Error::WrongHeaderSequence)
 			}
 		}
@@ -872,11 +880,17 @@ impl HeaderByHash {
 	) -> Result<encoded::Header, Error> {
 		let expected_hash = match (self.0, start) {
 			(Field::Scalar(h), &net_request::HashOrNumber::Hash(h2)) => {
-				if h != h2 { return Err(Error::WrongHash(h, h2)) }
+				if h != h2 {
+					trace!(target: "on_demand", "HeaderByHash bad hash");
+					return Err(Error::WrongHash(h, h2))
+				}
 				h
 			}
 			(_, &net_request::HashOrNumber::Hash(h2)) => h2,
-			_ => return Err(Error::HeaderByNumber),
+			_ => {
+				trace!(target: "on_demand", "HeaderByHash request by block number instead of hash");
+				return Err(Error::HeaderByNumber)
+			}
 		};
 
 		let header = headers.get(0).ok_or(Error::Empty)?;
@@ -885,6 +899,7 @@ impl HeaderByHash {
 			cache.lock().insert_block_header(hash, header.clone());
 			Ok(header.clone())
 		} else {
+			trace!(target: "on_demand", "HeaderByHash bad hash");
 			Err(Error::WrongHash(expected_hash, hash))
 		}
 	}
@@ -995,7 +1010,7 @@ impl Account {
 				}))
 			},
 			None => {
-				trace!(target: "on_demand", "Account {:?} not found", self.address);
+				trace!(target: "on_demand", "Bad account proof for: {}", self.address);
 				Ok(None)
 			}
 		}
@@ -1023,6 +1038,7 @@ impl Code {
 		if &found_hash == code_hash {
 			Ok(code.to_vec())
 		} else {
+			trace!(target: "on_demand", "Bad Code proof for: {}", code_hash);
 			Err(Error::WrongHash(*code_hash, found_hash))
 		}
 	}
@@ -1092,7 +1108,10 @@ impl Signal {
 	pub fn check_response(&self, _: &Mutex<::cache::Cache>, signal: &[u8]) -> Result<Vec<u8>, Error> {
 		self.proof_check.check_proof(self.engine.machine(), signal)
 			.map(|_| signal.to_owned())
-			.map_err(|_| Error::BadProof)
+			.map_err(|_| {
+				trace!(target: "on_demand", "Bad epoch_signal");
+				Error::BadProof
+			})
 	}
 }
 
