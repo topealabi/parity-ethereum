@@ -49,9 +49,13 @@ mod signature;
 mod secret;
 mod extended;
 
+
+
 pub mod brain_recover;
 pub mod crypto;
 pub mod math;
+
+pub mod eip1024;
 
 pub use self::parity_wordlist::Error as WordlistError;
 pub use self::brain::Brain;
